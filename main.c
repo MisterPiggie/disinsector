@@ -16,6 +16,7 @@ int main(void)
         perror("readlink");
         return 1;
     }
+
     exe_path[len] = '\0';
 
     int fd = open(exe_path, O_RDONLY);
@@ -23,6 +24,7 @@ int main(void)
 
     Dwarf_Off offset = 0, next_offset;
     size_t header_size;
+
     while (dwarf_nextcu(dbg, offset, &next_offset, &header_size, 0, 0, 0) == 0) {
         Dwarf_Die cu_die;
         dwarf_offdie(dbg, offset + header_size, &cu_die);
