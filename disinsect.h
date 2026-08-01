@@ -63,7 +63,7 @@ int DIS_continue(void);
 void tracer_loop(void);
 void tracer_stop_threads(void);
 void tracer_exit(void);
-void tracer_code_to_action(uint8_t code);
+void tracer_code_handler(uint8_t code);
 int stop_thread(pid_t tid);
 
 int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data);

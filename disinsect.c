@@ -101,7 +101,6 @@ void tracer_stop_threads(void)
     closedir(dir);
 
     return;
-
 }
 
 int stop_thread(pid_t tid)
@@ -147,8 +146,36 @@ void tracer_loop(void)
             }
         }
 
-        tracer_code_to_action(buffer);
+        tracer_code_handler(buffer);
     }
+}
 
+
+void tracer_code_handler(uint8_t code)
+{
+    //TODO this is where i need to count treads; Create this funcs
+    int count = tracer_count_threads();
+    switch(code)
+    {
+        case CODE_BREAK:
+            if (count < 1)
+                break;
+            tracer_break_threads();
+            break;
+        case CODE_CONTINUE:
+            if (count < 1)
+                break;
+            tracer_continue_threads();
+            break;
+        case CODE_CHECKPOINT:
+            if (count >= 1)
+            {
+                perror("Checkpoint is not supported with multithreaded apps\n");
+                break;
+            }
+
+            tracer_checkpoint_make();
+            break;
+    }
 }
 
