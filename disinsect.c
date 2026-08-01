@@ -7,6 +7,7 @@
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <ucontext.h>
+#include <errno.h>
  
 int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data)
 {
@@ -24,16 +25,36 @@ int DIS_insector_init(void)
     dl_iterate_phdr(dl_phdr_callback, &debugger.main_load_bias);
     debugger.main_pid = getpid();
 
-    pipe(debugger.main_to_tracer);
-    pipe(debugger.tracer_to_main);
+    if (pipe(debugger.main_to_tracer) == -1)
+    {
+        perror("Failed to init pipe main_to_tracer\n");
+        return -1;
+    }
+    if (pipe(debugger.tracer_to_main) == -1)
+    {
+        perror("Failed to init pipe main_to_tracer\n");
+        return -1;
+    }
 
     pid_t pid = fork();
+    
+    if (pid == -1)
+    {
+        perror("Failed to create tracer; fork() call returned -1");
+        return -1;
+    }
 
     if (pid == 0) {
+        close(debugger.main_to_tracer[1]);
+        close(debugger.tracer_to_main[0]);
+
         debugger.role = ROLE_TRACER;
         debugger.tracer_pid = getpid();
         tracer_loop();
     }
+
+    close(debugger.main_to_tracer[0]);
+    close(debugger.tracer_to_main[1]);
 
     debugger.role = ROLE_MAIN;
     debugger.tracer_pid = pid;
@@ -106,5 +127,28 @@ int stop_thread(pid_t tid)
 
 void tracer_loop(void)
 {
+    uint8_t buffer;
+
+    while(1) {
+        ssize_t bytes_read = read(debugger.main_to_tracer[0], &buffer, sizeof(buffer));
+        if (bytes_read == 0)
+            tracer_exit();
+        else if (bytes_read == -1) {
+            if (errno == EINTR)
+                continue;
+            else {
+                uint8_t err = TRACER_FAILED;
+                write(debugger.tracer_to_main[1], &err, sizeof(err));
+                if (errno == EBADF || errno == EINVAL) {  //test version might just return all of the time 
+                    tracer_exit();
+                    return;
+                }
+                continue; //might cahnge to return need to think about main loop
+            }
+        }
+
+        tracer_code_to_action(buffer);
+    }
 
 }
+
