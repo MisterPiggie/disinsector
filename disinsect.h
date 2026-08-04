@@ -7,6 +7,8 @@
 
 #define TRACER_FAILED 0x99
 
+#define THREAD_MAX 1024
+
 
 typedef struct 
 {
@@ -33,6 +35,9 @@ typedef struct
     //Check if you actually need to know both
     pid_t       main_pid;
     pid_t       tracer_pid;
+
+    pid_t       tids[THREAD_MAX];
+    int         tids_count;
 
     uintptr_t   main_load_bias;
 
@@ -61,10 +66,11 @@ int DIS_continue(void);
 
 
 void tracer_loop(void);
-void tracer_stop_threads(void);
+int tracer_stop_threads(void);
 void tracer_exit(void);
 void tracer_code_handler(uint8_t code);
 int stop_thread(pid_t tid);
+int continue_thread(pid_t tid);
 
 int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data);
 
