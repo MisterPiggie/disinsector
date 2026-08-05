@@ -271,8 +271,31 @@ void main_repl(void)
         if (!cmd)
             continue;
 
+        if (strcmp(cmd, "continue"))
+            //might need clean up
+            break;
+        else if (strcmp(cmd, "exit") == 0)
+            //also migth need cleanup
+            exit(0);
+        else if (strcmp(cmd, "checkpoint"))
+            //need arguments; look up how gdb does that
+            continue;
+        else if (strcmp(cmd, "print"))
+            //need arguments; look up how gdb does that
+            continue;
+        else if (strcmp(cmd, "set"))
+            //need arguments; also need to verify types
+            continue;
+        else if (strcmp(cmd, "help"))
+            continue;
+        else 
+            //print about help command
+            printf("Invalid command\n");
+
 
     }
 }
+//TODO finish this first then do other 
+void tracer_exit(void);
 
 void main_break(void);
