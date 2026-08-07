@@ -9,6 +9,28 @@
 #include <sys/wait.h>
 #include <ucontext.h>
 #include <errno.h>
+
+/*
+ * I need to redesing all of this to tired and stupid
+ * Firstly tracer giving error responses is bad it doesnt work; introduces to many fail states
+ * Secondly need to remake the whole tracer init logic 
+ * init -> start tracer
+ * if success set tracer_set = true
+ * if something failed stop the whole logic at init and exit
+ * then tracer works with threads, if something went wrong i either notify user that thread X wasnt stopped and continue working with debugger 
+ * or outright exit full stop. 
+ * full stop exit sound better at least at the initial state
+ * if something goes wrong just stop the whole process and when project matures get more workarounds and logic
+ * problem is communication between tracer and main 
+ * if something went wrong 
+ * so no 
+ * wait 
+ * i send break request to tracer
+ * wait my whole logic is wrong 
+ * DIS_break need to send code to tracer from main 
+ * main listen for response if response doesnt come or error i stop the whole app
+ * if repsonse is good i continue with REPL
+ */
  
 int dl_phdr_callback(struct dl_phdr_info *info, size_t size, void *data)
 {
@@ -95,6 +117,7 @@ int tracer_stop_threads(void)
     while ((entry = readdir(dir)) != NULL) {
         if (debugger.tids_count >= THREAD_MAX)
         {
+            //TODO change max threads to dynamic
             perror("Max threads amount exceeded\n");
             return -1;
         }
@@ -121,20 +144,50 @@ int stop_thread(pid_t tid)
 {
     if (ptrace(PTRACE_ATTACH, tid, NULL, NULL) == -1) {
         char err_msg[128];
-        sprintf(err_msg, "PTRACE_ATTACH failed on thread with id: %d", tid);
+        snprintf(err_msg, sizeof(err_msg), "PTRACE_ATTACH failed on thread with tid: %d", tid);
 
         perror(err_msg);
         return -1;
     }
 
     int status;
-    waitpid(tid, &status, 0);
+    pid_t result = waitpid(tid, &status, 0);
+
+    if (result == -1) {
+        if (errno != EINTR) {
+            perror("waitpid failed");
+            return -1;
+        }
+
+        bool is_success = false;
+        
+        for (int tries = 0; tries < 3; tries++) {
+            result = waitpid(tid, &status, 0);
+            if (result != -1) {
+                is_success = true;
+                break;
+            }
+
+            if (errno != EINTR) {
+                perror("waitpid failed");
+                return -1;
+            }
+        }
+
+        if (!is_success) {
+            perror("waitpid failed");
+            return -1;
+        }
+    }
 
     if (!WIFSTOPPED(status)) {
-        char err_msg[128];
-        sprintf(err_msg, "Unexpected waitpid status code %d on thread with id: %d", status, tid);
-
-        perror(err_msg);
+        if (WIFEXITED(status)) {
+            fprintf(stderr, "Thread %d exited before it could be stopped; exit code %d\n", tid, WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            fprintf(stderr, "Thread %d was killed by signal %d before it could be stopped\n", tid, WTERMSIG(status));
+        } else {
+            fprintf(stderr, "Unexpected waitpid status 0x%x on thread %d\n", status, tid);
+        }
         return -1;
     }
 
@@ -214,8 +267,11 @@ int tracer_continue_threads(void)
 int continue_thread(pid_t tid)
 {
     if (ptrace(PTRACE_DETACH, tid, NULL, 0) == -1) {
+        if (errno == ESRCH) 
+            return 0;
+
         char err_msg[128];
-        sprintf(err_msg, "PTRACE_DETACH failed on thread with id: %d", tid);
+        snprintf(err_msg, sizeof(err_msg), "PTRACE_DETACH failed on thread with id: %d", tid);
 
         perror(err_msg);
         return -1;
@@ -295,7 +351,18 @@ void main_repl(void)
 
     }
 }
-//TODO finish this first then do other 
-void tracer_exit(void);
+ 
+void tracer_exit(void)
+{
+    bool exited_without_errors = true;
+    for (int i = 0; i < debugger.tids_count; i++)
+        if (continue_thread(debugger.tids[i]) != 0)
+            exited_without_errors = false;
+
+    if (exited_without_errors)
+        exit(0);
+
+    exit(1);
+}
 
 void main_break(void);
