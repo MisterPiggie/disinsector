@@ -8,7 +8,7 @@ io_status io_send_data(int fd, const void *buf, size_t size)
     size_t total_bytes_sent = 0;
     while (total_bytes_sent < size)
     {
-        ssize_t bytes_sent = write(fd, buf + total_bytes_sent, size - total_bytes_sent);
+        ssize_t bytes_sent = write(fd, data + total_bytes_sent, size - total_bytes_sent);
         if (bytes_sent < 0)
         {
             if (errno == EINTR)
@@ -28,7 +28,7 @@ io_status io_read_data(int fd, void *buf, size_t size)
     size_t total_bytes_read = 0;
     while (total_bytes_read < size)
     {
-        ssize_t bytes_read = write(fd, buf + total_bytes_read, size - total_bytes_read);
+        ssize_t bytes_read = read(fd, data + total_bytes_read, size - total_bytes_read);
         if (bytes_read < 0)
         {
             if (errno == EINTR)

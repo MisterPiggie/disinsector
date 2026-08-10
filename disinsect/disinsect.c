@@ -28,7 +28,7 @@ int DIS_insector_init(void)
 {
     //getting bias
     dl_iterate_phdr(dl_phdr_callback, &debugger.main_load_bias);
-    debugger.main_pid = getpid();
+    debugger.main_pid = gettid();
 
     //initing pipes 
     if (pipe(debugger.main_to_tracer) == -1)

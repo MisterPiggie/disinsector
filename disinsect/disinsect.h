@@ -43,6 +43,8 @@ typedef struct
     pid_t       main_pid;
     pid_t       tracer_pid;
 
+    pid_t       caller_tid;
+
     pid_t       tids[THREAD_MAX];
     int         tids_count;
 

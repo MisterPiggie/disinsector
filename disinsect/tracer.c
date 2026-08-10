@@ -1,4 +1,5 @@
 #include "tracer.h"
+#include "communication.h"
 #include "disinsect.h"
 #include <dirent.h>
 #include <stdlib.h>
@@ -6,6 +7,7 @@
 #include <sys/wait.h>
 #include <stdio.h>
 #include <errno.h>
+#include <string.h>
 
 /* 
  * this is the biggest source of problem need to undesrtand how to handle errors at different stages 
@@ -24,21 +26,9 @@ void tracer_loop(void)
     uint8_t buffer;
 
     while(1) {
-        ssize_t bytes_read = read(debugger.main_to_tracer[0], &buffer, sizeof(buffer));
-        if (bytes_read == 0)
-            tracer_exit();
-        else if (bytes_read == -1) {
-            if (errno == EINTR)
-                continue;
-            else {
-                send_to_main(TRACER_FAILED);
-                if (errno == EBADF || errno == EINVAL) {  //test version might just return all of the time 
-                    tracer_exit();
-                    return;
-                }
-                continue; //might cahnge to return need to think about main loop
-            }
-        }
+        io_status status = io_read_data(debugger.main_to_tracer[0], &buffer, sizeof(buffer));
+        if (status != IO_OK)
+            _exit(TRACER_EXIT_RESUME_CLEAN);
 
         tracer_code_handler(buffer);
     }
@@ -46,22 +36,46 @@ void tracer_loop(void)
 
 void tracer_code_handler(uint8_t code)
 {
-    //TODO this is where i need to count treads; Create this funcs
-    bool has_threads = tracer_has_threads();
+    tracer_exit_codes exit_code;
+
     switch(code)
     {
         case CODE_BREAK:
-            if (!has_threads)
-                break;
-            tracer_break_threads();
+        {
+            if (tracer_stop_threads() != 0)
+            {
+                if (tracer_continue_threads() != 0)
+                    exit_code = TRACER_EXIT_RESUME_FAIL;
+                else 
+                    exit_code = TRACER_EXIT_RESUME_CLEAN;
+
+                io_status status = io_send_data(debugger.tracer_to_main[1], &exit_code, sizeof(exit_code));
+                if (status != IO_OK)
+                    _exit(exit_code);
+            } else
+            {
+                exit_code = TRACER_OK;
+                io_status status = io_send_data(debugger.tracer_to_main[1], &exit_code, sizeof(exit_code));
+                if (status != IO_OK)
+                {
+                    exit_code = (tracer_continue_threads() == 0) ? TRACER_EXIT_RESUME_CLEAN : TRACER_EXIT_RESUME_FAIL;
+                    _exit(exit_code);
+                }
+            }
             break;
+        }
         case CODE_CONTINUE:
-            if (!has_threads)
-                break;
-            tracer_continue_threads();
+        {
+            exit_code = (tracer_continue_threads() == 0) ? TRACER_OK : TRACER_EXIT_RESUME_FAIL;
+
+            io_status status = io_send_data(debugger.tracer_to_main[1], &exit_code, sizeof(exit_code));
+            if (status != IO_OK)
+                _exit(exit_code == TRACER_OK ? TRACER_EXIT_RESUME_CLEAN : TRACER_EXIT_RESUME_FAIL);
+
             break;
+        }
         case CODE_CHECKPOINT:
-            if (!has_threads)
+            if (!tracer_has_threads())
             {
                 perror("Checkpoint is not supported with multithreaded apps\n");
                 break;
@@ -82,31 +96,35 @@ int tracer_stop_threads(void)
 
     if (!dir)
     {
-        perror("No threads are found\n");
+        fprintf(stderr, "Failed to open %s: %s\n", path, strerror(errno));
         return -1;
     }
 
     struct dirent *entry;
 
     while ((entry = readdir(dir)) != NULL) {
-        if (debugger.tids_count >= THREAD_MAX)
-        {
-            //TODO change max threads to dynamic
-            perror("Max threads amount exceeded\n");
-            return -1;
-        }
-
         if (entry->d_name[0] == '.')
             continue;
 
+        if (debugger.tids_count >= THREAD_MAX)
+        {
+            //TODO change max threads to dynamic
+            closedir(dir);
+            fprintf(stderr, "Max threads amount exceeded\n");
+            return -1;
+        }
+
         pid_t tid = atoi(entry->d_name);
-        if (tid == debugger.main_pid)
+        if (tid == debugger.caller_tid)
             continue;
 
         if (stop_thread(tid) != 0)
+        {
+            closedir(dir);
             return -1;
+        }
 
-        debugger.tids_count++;
+        debugger.tids[debugger.tids_count++] = tid;
     }
 
     closedir(dir);
@@ -116,104 +134,41 @@ int tracer_stop_threads(void)
 
 int stop_thread(pid_t tid)
 {
-    if (ptrace(PTRACE_ATTACH, tid, NULL, NULL) == -1) {
-        char err_msg[128];
-        snprintf(err_msg, sizeof(err_msg), "PTRACE_ATTACH failed on thread with tid: %d", tid);
-
-        perror(err_msg);
+    if (ptrace(PTRACE_ATTACH, tid, NULL, NULL) == -1)
+    {
+        fprintf(stderr, "PTRACE_ATTACH failed on thread with tid: %d: %s\n", tid, strerror(errno));
         return -1;
     }
 
     int status;
-    pid_t result = waitpid(tid, &status, 0);
+    pid_t result;
 
-    if (result == -1) {
-        if (errno != EINTR) {
-            perror("waitpid failed");
-            return -1;
-        }
+    do 
+    {
+        result = waitpid(tid, &status, 0);
+    } while (result == -1 && errno == EINTR);
 
-        bool is_success = false;
-        
-        for (int tries = 0; tries < 3; tries++) {
-            result = waitpid(tid, &status, 0);
-            if (result != -1) {
-                is_success = true;
-                break;
-            }
-
-            if (errno != EINTR) {
-                perror("waitpid failed");
-                return -1;
-            }
-        }
-
-        if (!is_success) {
-            perror("waitpid failed");
-            return -1;
-        }
+    if (result == -1)
+    {
+        fprintf(stderr, "waitpid failed on thread with tid: %d: %s\n", tid, strerror(errno));
+        return -1;
     }
 
-    if (!WIFSTOPPED(status)) {
-        if (WIFEXITED(status)) {
+    if (!WIFSTOPPED(status))
+    {
+        if (WIFEXITED(status))
             fprintf(stderr, "Thread %d exited before it could be stopped; exit code %d\n", tid, WEXITSTATUS(status));
-        } else if (WIFSIGNALED(status)) {
+        else if (WIFSIGNALED(status))
             fprintf(stderr, "Thread %d was killed by signal %d before it could be stopped\n", tid, WTERMSIG(status));
-        } else {
+        else
             fprintf(stderr, "Unexpected waitpid status 0x%x on thread %d\n", status, tid);
-        }
+       
         return -1;
     }
 
     return 0;
 }
 
-/* this is wrong remade using communication.h
-void send_to_main(uint8_t code)
-{
-    ssize_t bytes_written;
-    do {
-        bytes_written = write(debugger.tracer_to_main[1], &code, sizeof(code));
-    } while (bytes_written < 0 && errno == EINTR);
-
-    if (bytes_written < 0) {
-        perror("Error sending to main; Abort the process\n");
-        exit(1);
-    }
-}
-*/
-
-bool tracer_has_threads(void)
-{
-    char path[64];
-    int count = 0;
-
-    snprintf(path, sizeof(path), "/proc/%d/task", debugger.main_pid);
-
-    DIR *dir = opendir(path);
-
-    if (!dir)
-        return false;
-
-    struct dirent *entry;
-
-    while ((entry = readdir(dir)) != NULL && count < 2) {
-        if (entry->d_name[0] == '.')
-            continue;
-        count++;
-    }
-
-    closedir(dir);
-
-    return count >= 2;
-}
-
-void tracer_break_threads(void)
-{
-    uint8_t buffer;
-    if(tracer_stop_threads() != 0)
-        perror("Failed to stop threads\n");
-}
 
 int tracer_continue_threads(void)
 {
@@ -256,4 +211,20 @@ void tracer_exit(void)
     exit(1);
 }
 
-
+bool tracer_has_threads(void)
+{
+    char path[64];
+    int count = 0;
+    snprintf(path, sizeof(path), "/proc/%d/task", debugger.main_pid);
+    DIR *dir = opendir(path);
+    if (!dir)
+        return false;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL && count < 2) {
+        if (entry->d_name[0] == '.')
+            continue;
+        count++;
+    }
+    closedir(dir);
+    return count >= 2;
+}
