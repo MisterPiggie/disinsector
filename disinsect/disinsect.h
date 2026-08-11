@@ -1,21 +1,18 @@
 #include <elfutils/libdw.h>
 #include <link.h>
 
-#define CODE_BREAK 0x13
-#define CODE_CONTINUE 0x31
-#define CODE_CHECKPOINT 0x33
-
-#define TRACER_FAILED 0x99
-
+#define TIMEOUT_MS 1000
 #define THREAD_MAX 1024
 
 
 typedef enum
 {
-    THREAD_STOP_OK,
-    THREAD_STOP_FAILED_RESUMED,
-    THREAD_STOP_FAILED_CANT_RESUME,
-} ERR_CODE;
+    TIMEOUT_EXIT,
+    COMMUNICATION_FAIL,
+    THREAD_FAIL,
+    EXIT_CLEAN,
+    EXIT_FAIL,
+} EXIT_CODE;
 
 typedef struct 
 {
@@ -69,9 +66,10 @@ typedef enum
 
 int DIS_insector_init(void);
 int DIS_insector_close(void);
-int DIS_break(void);
+void DIS_break(void);
 int DIS_print_all(void);
-int DIS_continue(void);
+void main_continue(void);
+void main_exit(void);
 
 void send_to_tracer(uint8_t code);
 void send_to_main(uint8_t code);

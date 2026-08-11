@@ -77,7 +77,8 @@ void tracer_code_handler(uint8_t code)
         case CODE_CHECKPOINT:
             if (!tracer_has_threads())
             {
-                perror("Checkpoint is not supported with multithreaded apps\n");
+                printf("Checkpoint is not supported with multithreaded apps\n\
+                        Checkpoint was not created");
                 break;
             }
 
@@ -172,14 +173,15 @@ int stop_thread(pid_t tid)
 
 int tracer_continue_threads(void)
 {
+    bool any_failed = false;
     for (int i = 0; i < debugger.tids_count; i++) {
         pid_t tid = debugger.tids[i];
         if (continue_thread(tid) != 0)
-            return -1;
+            any_failed = true;
 
     }
-
-    return 0;
+    debugger.tids_count = 0;
+    return any_failed ? -1 : 0;
 }
 
 int continue_thread(pid_t tid)
@@ -198,19 +200,6 @@ int continue_thread(pid_t tid)
     return 0;
 }
 
-void tracer_exit(void)
-{
-    bool exited_without_errors = true;
-    for (int i = 0; i < debugger.tids_count; i++)
-        if (continue_thread(debugger.tids[i]) != 0)
-            exited_without_errors = false;
-
-    if (exited_without_errors)
-        exit(0);
-
-    exit(1);
-}
-
 bool tracer_has_threads(void)
 {
     char path[64];
@@ -227,4 +216,15 @@ bool tracer_has_threads(void)
     }
     closedir(dir);
     return count >= 2;
+}
+
+void tracer_exit(void)
+{
+    tracer_exit_codes exit_code = TRACER_EXIT_RESUME_CLEAN;
+    if (debugger.tids_count != 0)
+        if (tracer_continue_threads() != 0)
+            exit_code = TRACER_EXIT_RESUME_FAIL;
+
+    io_send_data(debugger.tracer_to_main[1], &exit_code, sizeof(exit_code));
+    _exit(exit_code);
 }

@@ -1,6 +1,10 @@
 #define _GNU_SOURCE
 #include "disinsect.h"
+#include "communication.h"
+#include "tracer.h"
 #include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,11 +94,12 @@ void main_repl(void)
             continue;
 
         if (strcmp(cmd, "continue"))
-            //might need clean up
+        {
+            main_continue();
             break;
+        }
         else if (strcmp(cmd, "exit") == 0)
-            //also migth need cleanup
-            exit(0);
+            main_exit();
         else if (strcmp(cmd, "checkpoint"))
             //need arguments; look up how gdb does that
             continue;
@@ -114,39 +119,136 @@ void main_repl(void)
     }
 }
  
-/* 
- * THIS CODE IS AWFUL KILL URSELF PLEASE THANK YOU
- * TODO: REDO THIS USING communication.h for sending and reading 
- *       remake to handle errors gotten from tracer if any were recieved
- *
- *
- *
- * void send_to_tracer(uint8_t code)
- * {
- *     ssize_t bytes_written;
- *     do {
- *         bytes_written = write(debugger.main_to_tracer[1], &code, sizeof(code));
- *     } while (bytes_written < 0 && errno == EINTR);
- * 
- *     if (bytes_written <= 0) {
- *         perror("Error sending to tracer; Abort the process\n");
- *         exit(1);
- *   }
- * }
+void DIS_break(void)
+{
+    int code = CODE_BREAK;
+    io_status status = io_send_data(debugger.main_to_tracer[1], &code, sizeof(code));
+    if (status != IO_OK)
+    {
+        fprintf(stderr, "Communication between main and tracer failed\nExit debbuger");
+        return;
+    }
 
- * void read_from_tracer(void)
- * {
- *     ssize_t bytes_read;
- *     uint8_t code;
- * 
- *   do {
- *         bytes_read = read(debugger.main_to_tracer[1], &code, sizeof(code));
- *     } while (bytes_read < 0 && errno == EINTR);
- * 
- *     if (bytes_read < 0) {
- *         perror("Error reading from tracer; Abort the process\n");
- *         exit(1);
- *     }
- * }
- */
+    status = io_read_data_timeout(debugger.tracer_to_main[0], &code, sizeof(code), TIMEOUT_MS);
+    if (status == IO_TIMEOUT)
+    {
+        kill(debugger.tracer_pid, SIGKILL);
 
+        int wstatus;
+        waitpid(debugger.tracer_pid, &wstatus, 0);   
+
+        fprintf(stderr, "Communication between main and tracer timed out\nExiting app");
+        _exit(TIMEOUT_EXIT);
+    }
+
+    if (status != IO_OK)
+    {
+        int wstatus;
+        pid_t result = waitpid(debugger.tracer_pid, &wstatus, 0);
+        if (result == debugger.tracer_pid && WIFEXITED(wstatus))
+        {
+            int exit_code = WEXITSTATUS(wstatus);
+            if (exit_code == TRACER_EXIT_RESUME_CLEAN) 
+                return;
+        }
+
+        _exit(THREAD_FAIL);
+    }
+
+    if (code == TRACER_EXIT_RESUME_CLEAN)
+        return;
+    else if (code == TRACER_EXIT_RESUME_FAIL)
+        _exit(THREAD_FAIL);
+
+    main_repl();
+}
+
+void main_continue(void)
+{
+    int code = CODE_CONTINUE;
+    io_status status = io_send_data(debugger.main_to_tracer[1], &code, sizeof(code));
+    if (status != IO_OK)
+    {
+        kill(debugger.tracer_pid, SIGKILL);
+
+        int wstatus;
+        waitpid(debugger.tracer_pid, &wstatus, 0);   
+
+        fprintf(stderr, "Communication between main and tracer failed\nExiting app");
+        _exit(COMMUNICATION_FAIL);
+    }
+
+    status = io_read_data_timeout(debugger.tracer_to_main[0], &code, sizeof(code), TIMEOUT_MS);
+    if (status == IO_TIMEOUT)
+    {
+        kill(debugger.tracer_pid, SIGKILL);
+
+        int wstatus;
+        waitpid(debugger.tracer_pid, &wstatus, 0);   
+
+        fprintf(stderr, "Communication between main and tracer timed out\nExiting app");
+        _exit(TIMEOUT_EXIT);
+    }
+
+    //TODO: CHECK RESUME CLEAN LOGIC AND HOW TO HANDLE IT
+    if (status != IO_OK)
+    {
+        int wstatus;
+        pid_t result = waitpid(debugger.tracer_pid, &wstatus, 0);
+        if (result == debugger.tracer_pid && WIFEXITED(wstatus))
+        {
+            int exit_code = WEXITSTATUS(wstatus);
+            if (exit_code == TRACER_EXIT_RESUME_CLEAN) 
+                return;
+        }
+
+        _exit(THREAD_FAIL);
+    }
+
+    if (code == TRACER_EXIT_RESUME_CLEAN)
+        return;
+    else if (code == TRACER_EXIT_RESUME_FAIL)
+        _exit(THREAD_FAIL);
+}
+
+void main_exit(void)
+{
+    int code = CODE_EXIT;
+    io_status status = io_send_data(debugger.main_to_tracer[1], &code, sizeof(code));
+    if (status != IO_OK)
+    {
+        kill(debugger.tracer_pid, SIGKILL);
+
+        int wstatus;
+        waitpid(debugger.tracer_pid, &wstatus, 0);   
+
+        fprintf(stderr, "Communication between main and tracer failed\nExiting app");
+        _exit(COMMUNICATION_FAIL);
+    }
+
+    status = io_read_data_timeout(debugger.tracer_to_main[0], &code, sizeof(code), TIMEOUT_MS);
+    if (status == IO_TIMEOUT)
+    {
+        kill(debugger.tracer_pid, SIGKILL);
+
+        int wstatus;
+        waitpid(debugger.tracer_pid, &wstatus, 0);   
+
+        fprintf(stderr, "Communication between main and tracer timed out\nExiting app");
+        _exit(TIMEOUT_EXIT);
+    }
+
+    if (status != IO_OK)
+    {
+        int wstatus;
+        pid_t result = waitpid(debugger.tracer_pid, &wstatus, 0);
+        if (result == debugger.tracer_pid && WIFSIGNALED(wstatus))
+            fprintf(stderr, "tracer crashed during exit (signal %d)\n", WTERMSIG(wstatus));
+        _exit(EXIT_FAIL);
+    }
+
+    if (code == TRACER_EXIT_RESUME_CLEAN)
+        _exit(EXIT_CLEAN);
+    else 
+        _exit(EXIT_FAIL);
+}

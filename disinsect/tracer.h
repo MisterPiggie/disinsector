@@ -4,6 +4,14 @@
 
 typedef enum
 {
+    CODE_BREAK,
+    CODE_CONTINUE,
+    CODE_EXIT,
+    CODE_CHECKPOINT,
+} TRACER_CODE;
+
+typedef enum
+{
     TRACER_OK,
     TRACER_EXIT_RESUME_CLEAN,
     TRACER_EXIT_RESUME_FAIL,
